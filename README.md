@@ -59,11 +59,20 @@ pip install genlayer-test==0.29.2
 gltest tests/ -v
 ```
 
+The 32 tests pass with `genlayer-test==0.29.2` on GenVM `v0.3.0-rc7` (resolved automatically by gltest).
+
 32 tests. They cover claim validation, round 1, appeal rules, all round 2 outcomes (upheld, overturned, refunded), reputation counters, finalize guards, withdrawals, unreadable evidence, cancellation and appeal rescue. Web and LLM calls are mocked so every validator returns the same verdict class.
 
 ## Verified on GenLayer Studio
 
-The full lifecycle (before `cancel_claim`, `rescue_appeal` and the evidence handling above were added) was executed on Studio with two accounts: `submit_claim` -> `adjudicate` (supported) -> `appeal` from a second account -> `adjudicate_appeal` (supported). Final state: `status: final`, `outcome: upheld`, both bonds credited to the claimant.
+Round 1, the appeal and round 2 were first executed on Studio with two accounts: `submit_claim` -> `adjudicate` (supported) -> `appeal` from a second account -> `adjudicate_appeal` (supported). Final state: `status: final`, `outcome: upheld`, both bonds credited to the claimant.
+
+After the stuck-claims fix the contract was redeployed and two new behaviours were checked on Studio:
+
+- `cancel_claim` on an open claim: `status: final`, `outcome: cancelled`, bond credited back to the claimant.
+- A claim whose evidence URL is a direct image link (not readable text): `adjudicate` completed with `round1_verdict: inconclusive`, `status: final`, `outcome: refunded`. The bond is not locked.
+
+`rescue_appeal` is covered only by the Direct Mode tests, because it needs a 3 day wait after the appeal window.
 
 ## Deploy
 
