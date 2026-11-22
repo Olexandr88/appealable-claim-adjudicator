@@ -42,6 +42,22 @@ The leader fetches the evidence and asks an LLM for a JSON verdict. Each validat
 - Treasury funds currently have no withdrawal path.
 - Appeal window is 24 hours (`APPEAL_WINDOW_SECONDS`).
 
+## Testing
+
+Tests run in GenLayer Direct Mode (in-memory, no Studio or Docker). Dependencies are pinned in `pyproject.toml`.
+
+```
+pip install genlayer-test==0.29.2
+gltest tests/ -v
+```
+
+Tests cover claim validation, round 1, appeal rules, all round 2 outcomes (upheld, overturned, refunded), reputation counters, finalize guards and withdrawals. Web and LLM calls are mocked so every validator returns the same verdict class.
+
+## Verified on GenLayer Studio
+
+The full lifecycle was executed on Studio with two accounts: `submit_claim` -> `adjudicate` (supported) -> `appeal` from a second account -> `adjudicate_appeal` (supported). Final state: `status: final`, `outcome: upheld`, both bonds credited to the claimant.
+
 ## Deploy
 
 Deploy `contracts/appealable_claim_adjudicator.py` in GenLayer Studio (no constructor arguments).
+
