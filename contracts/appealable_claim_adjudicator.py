@@ -10,6 +10,8 @@ VERDICTS = ("supported", "refuted", "inconclusive")
 APPEAL_WINDOW_SECONDS = 24 * 60 * 60
 MIN_BOND = 1_000_000_000_000_000  # 0.001 GEN
 MIN_STATEMENT_LEN = 20
+# After the appeal window plus this delay, a stuck appeal can be rescued.
+RESCUE_DELAY_SECONDS = 3 * 24 * 60 * 60
 
 # Used to send GEN out of the contract. Only emit_transfer() is called.
 @gl.evm.contract_interface
@@ -35,7 +37,7 @@ class Claim:
     appeal_bond: u256
     round2_verdict: str
     appeal_deadline: u64
-    outcome: str  # "" | upheld | overturned | refunded | forfeited | unchallenged
+    outcome: str  # "" | upheld | overturned | refunded | forfeited | unchallenged | cancelled
 
 
 def _now() -> int:
@@ -103,9 +105,29 @@ This result must be perfectly parsable by a JSON parser without errors.
 
         def leader_fn():
             blocks = []
+            readable = False
             for url in urls:
-                response = gl.nondet.web.get(url)
-                blocks.append(f"SOURCE {url}:\n{response.body.decode('utf-8')[:6000]}")
+                # An unreachable, non-text or empty page must never make the
+                # round fail (that would lock the bonds): it counts as no evidence.
+                try:
+                    response = gl.nondet.web.get(url)
+                    status = getattr(response, "status", 200)
+                    text = ""
+                    if status < 400:
+                        text = response.body.decode("utf-8", errors="replace")[:6000]
+                        # Mostly undecodable bytes means a binary file, not evidence.
+                        if text.count("\ufffd") * 10 > len(text):
+                            text = ""
+                except Exception:
+                    text = ""
+                if text.strip():
+                    readable = True
+                blocks.append(f"SOURCE {url}:\n{text}")
+            if not readable:
+                return {
+                    "verdict": "inconclusive",
+                    "reasoning": "Evidence was unreachable or empty.",
+                }
             result = gl.nondet.exec_prompt(
                 prompt + "\n\nEVIDENCE:\n" + "\n\n".join(blocks),
                 response_format="json",
@@ -157,6 +179,22 @@ This result must be perfectly parsable by a JSON parser without errors.
         )
         self.next_id = u32(self.next_id + 1)
         return claim_id
+
+    @gl.public.write
+    def cancel_claim(self, claim_id: u32) -> None:
+        """Claimant withdraws a claim that has not been adjudicated yet."""
+        if claim_id not in self.claims:
+            raise gl.vm.UserError("Unknown claim")
+        claim = self.claims[claim_id]
+        if gl.message.sender_address != claim.claimant:
+            raise gl.vm.UserError("Only the claimant can cancel")
+        if claim.status != "open":
+            raise gl.vm.UserError("Only an open claim can be cancelled")
+
+        claim.status = "final"
+        claim.outcome = "cancelled"
+        self._credit(claim.claimant, claim.bond)
+        self.claims[claim_id] = claim
 
     # ------------------------------------------------------------------
     # Round 1
@@ -256,6 +294,27 @@ This result must be perfectly parsable by a JSON parser without errors.
     # ------------------------------------------------------------------
     # Finalization and payouts
     # ------------------------------------------------------------------
+
+    @gl.public.write
+    def rescue_appeal(self, claim_id: u32) -> str:
+        """
+        Escape hatch for an appeal that was never adjudicated: once the appeal
+        window plus RESCUE_DELAY_SECONDS has passed, both bonds are refunded.
+        """
+        if claim_id not in self.claims:
+            raise gl.vm.UserError("Unknown claim")
+        claim = self.claims[claim_id]
+        if claim.status != "appealed":
+            raise gl.vm.UserError("Claim has no pending appeal")
+        if _now() <= int(claim.appeal_deadline) + RESCUE_DELAY_SECONDS:
+            raise gl.vm.UserError("Rescue delay has not passed")
+
+        self._credit(claim.claimant, claim.bond)
+        self._credit(claim.appellant, claim.appeal_bond)
+        claim.outcome = "refunded"
+        claim.status = "final"
+        self.claims[claim_id] = claim
+        return claim.outcome
 
     @gl.public.write
     def finalize(self, claim_id: u32) -> str:
